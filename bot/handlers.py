@@ -68,10 +68,6 @@ class AddServerStates(StatesGroup):
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Handle /start command"""
-    if message.from_user.id != settings.admin_id:
-        await message.answer("⛔ Доступ запрещён")
-        return
-    
     await message.answer(
         "🖥 <b>Server Health Bot</b>\n\n"
         "Мониторинг и управление серверами.\n\n"
