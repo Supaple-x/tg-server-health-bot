@@ -432,9 +432,7 @@ async def cb_opt_journal(callback: CallbackQuery):
             username=server.username,
             key_path=server.key_path
         )
-        await ssh.connect()
         result = await ssh.execute("journalctl --vacuum-size=200M 2>&1")
-        await ssh.disconnect()
 
         if result.success:
             # Parse freed space from output
@@ -482,7 +480,6 @@ async def cb_opt_cache(callback: CallbackQuery):
             username=server.username,
             key_path=server.key_path
         )
-        await ssh.connect()
         # Clean apt cache and tmp files older than 7 days
         result = await ssh.execute(
             "apt-get clean 2>/dev/null; "
@@ -490,7 +487,6 @@ async def cb_opt_cache(callback: CallbackQuery):
             "rm -rf /var/tmp/* 2>/dev/null; "
             "echo 'OK'"
         )
-        await ssh.disconnect()
 
         await callback.message.edit_text(
             f"✅ <b>Кэш очищен на {server_name}</b>\n\n"
@@ -530,7 +526,6 @@ async def cb_opt_logs(callback: CallbackQuery):
             username=server.username,
             key_path=server.key_path
         )
-        await ssh.connect()
         # Truncate large log files and remove old rotated logs
         result = await ssh.execute(
             "find /var/log -name '*.gz' -delete 2>/dev/null; "
@@ -539,7 +534,6 @@ async def cb_opt_logs(callback: CallbackQuery):
             "truncate -s 0 /var/log/*.log 2>/dev/null; "
             "echo 'OK'"
         )
-        await ssh.disconnect()
 
         await callback.message.edit_text(
             f"✅ <b>Логи очищены на {server_name}</b>\n\n"
@@ -578,9 +572,7 @@ async def cb_opt_packages(callback: CallbackQuery):
             username=server.username,
             key_path=server.key_path
         )
-        await ssh.connect()
         result = await ssh.execute("apt-get autoremove -y 2>&1 | tail -5")
-        await ssh.disconnect()
 
         await callback.message.edit_text(
             f"✅ <b>Старые пакеты удалены на {server_name}</b>\n\n"
