@@ -25,7 +25,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="📊 Статус всех", callback_data="status_all"),
-        InlineKeyboardButton(text="🔍 Проверить", callback_data="check_menu")
+        InlineKeyboardButton(text="🧹 Оптимизировать все", callback_data="optimize_all")
     )
     builder.row(
         InlineKeyboardButton(text="🖥 Серверы", callback_data="servers_list"),

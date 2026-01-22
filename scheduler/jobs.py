@@ -11,6 +11,7 @@ from config import settings
 from database.db import db
 from core.health_checker import check_local_server, check_remote_server
 from core.report_formatter import format_full_report, format_all_servers_summary
+from core.ssh_manager import SSHManager
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +84,36 @@ async def scheduled_health_check(bot: Bot):
             logger.error(f"Failed to send critical alert: {e}")
 
 
+async def auto_optimize_server(server, bot: Bot) -> str:
+    """Auto-optimize server when disk > 80%"""
+    try:
+        ssh = SSHManager(
+            host=server.host,
+            port=server.port,
+            username=server.username,
+            key_path=server.key_path
+        )
+
+        # Clean journal and cache
+        await ssh.execute("journalctl --vacuum-size=200M 2>&1")
+        await ssh.execute("apt-get clean 2>/dev/null; rm -rf /tmp/* /var/tmp/* 2>/dev/null")
+
+        # Check new disk usage
+        result = await ssh.execute("df / --output=pcent | tail -1 | tr -d ' %'")
+        new_percent = int(result.stdout.strip()) if result.success else 0
+
+        logger.info(f"Auto-optimized {server.name}, disk now at {new_percent}%")
+        return f"✅ Очищено, диск: {new_percent}%"
+
+    except Exception as e:
+        logger.error(f"Auto-optimize error for {server.name}: {e}")
+        return f"❌ Ошибка: {str(e)[:30]}"
+
+
 async def quick_alert_check(bot: Bot):
     """Quick check for critical issues (more frequent)"""
     servers = await db.get_all_servers()
-    
+
     for server in servers:
         try:
             if server.host == "localhost":
@@ -99,7 +126,22 @@ async def quick_alert_check(bot: Bot):
                     username=server.username,
                     key_path=server.key_path
                 )
-            
+
+            # Auto-optimize if disk > 80%
+            if report.disk_percent > 80:
+                logger.info(f"Disk on {server.name} at {report.disk_percent}%, auto-optimizing...")
+                optimize_result = await auto_optimize_server(server, bot)
+
+                await bot.send_message(
+                    chat_id=settings.admin_id,
+                    text=(
+                        f"🧹 <b>Авто-оптимизация: {server.name}</b>\n\n"
+                        f"Диск был заполнен на {report.disk_percent}%\n"
+                        f"{optimize_result}"
+                    ),
+                    parse_mode="HTML"
+                )
+
             # Only alert on status change to critical
             if report.overall_status == "critical" and server.last_status != "critical":
                 alert_text = (
@@ -108,15 +150,15 @@ async def quick_alert_check(bot: Bot):
                 )
                 for issue in report.issues:
                     alert_text += f"• {issue}\n"
-                
+
                 await bot.send_message(
                     chat_id=settings.admin_id,
                     text=alert_text,
                     parse_mode="HTML"
                 )
-            
+
             await db.update_last_check(server.name, report.overall_status)
-            
+
         except Exception as e:
             logger.error(f"Quick check error for {server.name}: {e}")
 

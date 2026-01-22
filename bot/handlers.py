@@ -589,6 +589,67 @@ async def cb_opt_packages(callback: CallbackQuery):
         )
 
 
+@router.callback_query(F.data == "optimize_all")
+async def cb_optimize_all(callback: CallbackQuery):
+    """Optimize all servers"""
+    await callback.answer("🧹 Запускаю оптимизацию...")
+
+    servers = await db.get_all_servers()
+
+    if not servers:
+        await callback.message.edit_text(
+            "📭 Нет серверов для оптимизации",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+
+    total = len(servers)
+    results = []
+
+    for i, server in enumerate(servers, 1):
+        flag = get_server_flag(server.name)
+        progress_bar = "▓" * i + "░" * (total - i)
+
+        await callback.message.edit_text(
+            f"🧹 <b>Оптимизация серверов</b> [{i}/{total}]\n\n"
+            f"{progress_bar}\n\n"
+            f"➡️ {flag} {server.name}...",
+            parse_mode="HTML"
+        )
+
+        try:
+            ssh = SSHManager(
+                host=server.host,
+                port=server.port,
+                username=server.username,
+                key_path=server.key_path
+            )
+
+            # Run optimization commands
+            journal_result = await ssh.execute("journalctl --vacuum-size=200M 2>&1")
+            cache_result = await ssh.execute(
+                "apt-get clean 2>/dev/null; "
+                "rm -rf /tmp/* /var/tmp/* 2>/dev/null; "
+                "echo OK"
+            )
+
+            status = "✅" if journal_result.success else "⚠️"
+            results.append(f"{status} {flag} {server.name}")
+
+        except Exception as e:
+            logger.error(f"Error optimizing {server.name}: {e}")
+            results.append(f"❌ {flag} {server.name}: {str(e)[:30]}")
+
+    # Show results
+    await callback.message.edit_text(
+        "🧹 <b>Оптимизация завершена</b>\n\n" +
+        "\n".join(results) +
+        "\n\n<i>Очищены журналы и кэш на всех серверах</i>",
+        reply_markup=main_menu_keyboard(),
+        parse_mode="HTML"
+    )
+
+
 @router.callback_query(F.data.startswith("map:"))
 async def cb_server_map(callback: CallbackQuery):
     """Show server map with services"""
