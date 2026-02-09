@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from config import settings
 from database.db import db
 from bot.handlers import router
+from bot.middleware import AuthMiddleware
 from scheduler.jobs import setup_scheduler, start_scheduler, stop_scheduler
 
 
@@ -105,6 +106,8 @@ async def main():
     )
     
     dp = Dispatcher()
+    router.message.middleware(AuthMiddleware())
+    router.callback_query.middleware(AuthMiddleware())
     dp.include_router(router)
     
     # Register startup/shutdown handlers

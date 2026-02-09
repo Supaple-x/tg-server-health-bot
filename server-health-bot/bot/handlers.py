@@ -72,8 +72,7 @@ class AddServerStates(StatesGroup):
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Handle /start command"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     await message.answer(
         "🖥 <b>Server Health Bot</b>\n\n"
@@ -92,8 +91,7 @@ async def cmd_start(message: Message):
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Handle /help command"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     help_text = """
 🖥 <b>Server Health Bot — Помощь</b>
@@ -121,32 +119,28 @@ async def cmd_help(message: Message):
 @router.message(F.text == "📊 Статус")
 async def reply_status(message: Message):
     """Handle status button from reply keyboard"""
-    if message.from_user.id != settings.admin_id:
-        return
+
     await cmd_status(message)
 
 
 @router.message(F.text == "🔐 VPN")
 async def reply_vpn(message: Message):
     """Handle VPN button from reply keyboard"""
-    if message.from_user.id != settings.admin_id:
-        return
+
     await cmd_vpn(message)
 
 
 @router.message(F.text == "🖥 Серверы")
 async def reply_servers(message: Message):
     """Handle servers button from reply keyboard"""
-    if message.from_user.id != settings.admin_id:
-        return
+
     await cmd_servers(message)
 
 
 @router.message(F.text == "⚙️ Настройки")
 async def reply_settings(message: Message):
     """Handle settings button from reply keyboard"""
-    if message.from_user.id != settings.admin_id:
-        return
+
     await message.answer(
         "⚙️ <b>Настройки</b>",
         reply_markup=settings_keyboard(),
@@ -159,8 +153,7 @@ async def reply_settings(message: Message):
 @router.message(Command("vpn"))
 async def cmd_vpn(message: Message):
     """VPN status and links"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     await message.answer(
         "🔐 <b>VPN</b>\n\nВыберите действие:",
@@ -174,8 +167,7 @@ async def cmd_vpn(message: Message):
 @router.message(Command("status"))
 async def cmd_status(message: Message):
     """Quick status of all servers + VPN"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     status_msg = await message.answer("🔄 Проверяю серверы и VPN...")
 
@@ -224,8 +216,7 @@ async def cmd_status(message: Message):
 @router.message(Command("check"))
 async def cmd_check(message: Message):
     """Check specific server or show menu"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     args = message.text.split(maxsplit=1)
 
@@ -243,8 +234,7 @@ async def cmd_check(message: Message):
 @router.message(Command("servers"))
 async def cmd_servers(message: Message):
     """List all servers"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     servers = await db.get_all_servers()
 
@@ -267,8 +257,7 @@ async def cmd_servers(message: Message):
 @router.message(Command("add"))
 async def cmd_add(message: Message, state: FSMContext):
     """Start adding a server"""
-    if message.from_user.id != settings.admin_id:
-        return
+
 
     await state.set_state(AddServerStates.name)
     await message.answer(
@@ -979,6 +968,142 @@ async def add_server_username(message: Message, state: FSMContext):
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {str(e)}")
+
+
+# ============== User Management (admin only) ==============
+
+@router.message(Command("adduser"))
+async def cmd_add_user(message: Message, is_admin: bool = False):
+    """Add authorized user by Telegram ID"""
+    if not is_admin:
+        await message.answer("🔒 Только администратор может управлять пользователями.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "ℹ️ Использование: <code>/adduser TELEGRAM_ID</code>\n\n"
+            "Пользователь может узнать свой ID у @userinfobot",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        telegram_id = int(args[1].strip())
+    except ValueError:
+        await message.answer("❌ ID должен быть числом.")
+        return
+
+    if telegram_id == settings.admin_id:
+        await message.answer("ℹ️ Администратор уже имеет полный доступ.")
+        return
+
+    success = await db.add_user(telegram_id, added_by=message.from_user.id)
+    if success:
+        await message.answer(
+            f"✅ Пользователь <code>{telegram_id}</code> добавлен.",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            f"ℹ️ Пользователь <code>{telegram_id}</code> уже авторизован.",
+            parse_mode="HTML"
+        )
+
+
+@router.message(Command("removeuser"))
+async def cmd_remove_user(message: Message, is_admin: bool = False):
+    """Remove authorized user"""
+    if not is_admin:
+        await message.answer("🔒 Только администратор может управлять пользователями.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "ℹ️ Использование: <code>/removeuser TELEGRAM_ID</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        telegram_id = int(args[1].strip())
+    except ValueError:
+        await message.answer("❌ ID должен быть числом.")
+        return
+
+    removed = await db.remove_user(telegram_id)
+    if removed:
+        await message.answer(
+            f"✅ Пользователь <code>{telegram_id}</code> удалён.",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            f"❌ Пользователь <code>{telegram_id}</code> не найден.",
+            parse_mode="HTML"
+        )
+
+
+@router.message(Command("users"))
+async def cmd_users(message: Message, is_admin: bool = False):
+    """List authorized users"""
+    if not is_admin:
+        await message.answer("🔒 Только администратор может просматривать список пользователей.")
+        return
+
+    users = await db.get_all_users()
+
+    lines = [
+        "👥 <b>Авторизованные пользователи:</b>",
+        "",
+        f"👑 <code>{settings.admin_id}</code> — администратор",
+    ]
+
+    for user in users:
+        name = f" (@{user.username})" if user.username else ""
+        lines.append(f"👤 <code>{user.telegram_id}</code>{name}")
+
+    if not users:
+        lines.append("\n<i>Других пользователей нет.</i>")
+
+    lines.append(f"\nВсего: {len(users) + 1}")
+    lines.append("\n/adduser ID — добавить\n/removeuser ID — удалить")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "users_list")
+async def cb_users_list(callback: CallbackQuery, is_admin: bool = False):
+    """Show users list via callback"""
+    if not is_admin:
+        await callback.answer("🔒 Только для администратора", show_alert=True)
+        return
+
+    users = await db.get_all_users()
+
+    lines = [
+        "👥 <b>Авторизованные пользователи:</b>",
+        "",
+        f"👑 <code>{settings.admin_id}</code> — администратор",
+    ]
+
+    for user in users:
+        name = f" (@{user.username})" if user.username else ""
+        lines.append(f"👤 <code>{user.telegram_id}</code>{name}")
+
+    if not users:
+        lines.append("\n<i>Других пользователей нет.</i>")
+
+    lines.append(f"\nВсего: {len(users) + 1}")
+    lines.append("\n/adduser ID — добавить\n/removeuser ID — удалить")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=settings_keyboard()
+    )
+    await callback.answer()
 
 
 # ============== Helper Functions ==============

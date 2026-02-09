@@ -50,6 +50,16 @@ class ServerService:
     docker_name: Optional[str] = None  # for docker containers
 
 
+@dataclass
+class User:
+    """Authorized bot user"""
+    id: Optional[int]
+    telegram_id: int
+    username: Optional[str] = None
+    added_by: Optional[int] = None  # telegram_id of admin who added
+    created_at: Optional[datetime] = None
+
+
 class Database:
     """Database manager for server configurations"""
     
@@ -115,6 +125,17 @@ class Database:
                     docker_name TEXT,
                     FOREIGN KEY (server_id) REFERENCES servers(id),
                     UNIQUE(server_id, name)
+                )
+            """)
+
+            # Authorized users table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    added_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -320,6 +341,48 @@ class Database:
             """, (server_name,))
             await db.commit()
             return True
+
+    # ============== Users ==============
+
+    async def is_authorized(self, telegram_id: int) -> bool:
+        """Check if user is authorized (admin or in users table)"""
+        if telegram_id == settings.admin_id:
+            return True
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,)
+            )
+            return await cursor.fetchone() is not None
+
+    async def add_user(self, telegram_id: int, username: str = None, added_by: int = None) -> bool:
+        """Add authorized user"""
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO users (telegram_id, username, added_by) VALUES (?, ?, ?)",
+                    (telegram_id, username, added_by)
+                )
+                await db.commit()
+                return True
+            except aiosqlite.IntegrityError:
+                return False
+
+    async def remove_user(self, telegram_id: int) -> bool:
+        """Remove authorized user"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM users WHERE telegram_id = ?", (telegram_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_all_users(self) -> list[User]:
+        """Get all authorized users"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM users ORDER BY created_at")
+            rows = await cursor.fetchall()
+            return [User(**dict(row)) for row in rows]
 
 
 # Global database instance

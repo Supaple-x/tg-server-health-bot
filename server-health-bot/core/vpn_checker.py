@@ -314,32 +314,37 @@ async def check_dpi_for_server(server_name: str) -> Optional[DPICheckResult]:
             relay_port=relay_port
         )
 
-    # Check relay connectivity (from external server back through Russia)
+    # Check relay connectivity FROM Russia to localhost:relay_port
+    # This is the actual client path: Client → Russia:relay_port → (DNAT) → target:443
     if relay_port:
         try:
             relay_cmd = (
-                f"timeout 5 bash -c '"
+                f"timeout 10 bash -c '"
                 f"start=$(date +%s%N); "
-                f"echo | openssl s_client -connect {host}:{port} "
+                f"echo | openssl s_client -connect 127.0.0.1:{relay_port} "
                 f"-servername www.microsoft.com -verify_quiet 2>/dev/null && "
                 f"end=$(date +%s%N); "
                 f"echo OK $(( (end - start) / 1000000 ))ms"
                 f"' 2>/dev/null || echo FAIL"
             )
-            # Check from the target server itself — connect through relay back
-            proxy = config.get("ssh_via")
-            if proxy:
-                r_success, r_output = await _execute_via_proxy(
-                    proxy_host=proxy["host"],
-                    proxy_user=proxy["user"],
-                    proxy_key=proxy["key_path"],
-                    target_host=config["host"],
-                    target_user=config["user"],
-                    target_key=config["key_path"],
-                    command=f"timeout 5 bash -c 'echo | openssl s_client -connect {russia['host']}:{relay_port} -servername www.microsoft.com -verify_quiet 2>/dev/null && echo OK' || echo FAIL",
-                    timeout=15
-                )
-                result.relay_ok = r_success and "OK" in r_output
+            r_success, r_output = await _execute_direct(
+                host=russia["host"],
+                user=russia["user"],
+                key_path=russia["key_path"],
+                command=relay_cmd,
+                timeout=15
+            )
+            if r_success and "OK" in r_output:
+                result.relay_ok = True
+                # Parse relay latency
+                parts = r_output.split()
+                if len(parts) > 1:
+                    try:
+                        result.relay_latency_ms = float(parts[1].replace("ms", ""))
+                    except ValueError:
+                        pass
+            else:
+                result.relay_ok = False
         except Exception as e:
             logger.error(f"Relay check error for {server_name}: {e}")
             result.relay_ok = False
@@ -427,7 +432,8 @@ def format_dpi_status_report(results: list[DPICheckResult]) -> str:
         # Relay status
         if r.relay_port and r.relay_ok is not None:
             if r.relay_ok:
-                relay = f"✅ Работает (:{r.relay_port})"
+                relay_lat = f" ({r.relay_latency_ms:.0f}ms)" if r.relay_latency_ms else ""
+                relay = f"✅ Работает (:{r.relay_port}){relay_lat}"
             else:
                 relay = f"❌ Не работает (:{r.relay_port})"
         else:

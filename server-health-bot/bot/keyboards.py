@@ -167,6 +167,9 @@ def settings_keyboard() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="📊 Пороги", callback_data="threshold_settings"),
+        InlineKeyboardButton(text="👥 Пользователи", callback_data="users_list")
+    )
+    builder.row(
         InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
     )
     return builder.as_markup()
