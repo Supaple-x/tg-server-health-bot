@@ -1,0 +1,50 @@
+{
+    "Russia": {
+        "host": "YOUR_RUSSIA_IP",
+        "ssh_direct": true,
+        "user": "YOUR_SSH_USER",
+        "key_path": "~/.ssh/your_key",
+        "services": [
+            {"name": "XRay Reality", "port": 2053, "check_cmd": "ss -tlnp | grep ':2053.*xray'"}
+        ],
+        "connections_cmd": "ss -tn state established sport = :2053 | grep -v Local | wc -l",
+        "links": [
+            {
+                "name": "VLESS Reality",
+                "protocol": "vless",
+                "link": "vless://YOUR-UUID@YOUR_RUSSIA_IP:2053?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=YOUR_PUBLIC_KEY&sid=YOUR_SID&type=tcp#Russia-Reality"
+            }
+        ]
+    },
+    "Finland": {
+        "host": "YOUR_FINLAND_IP",
+        "ssh_via": {
+            "host": "YOUR_RUSSIA_IP",
+            "user": "YOUR_SSH_USER",
+            "key_path": "~/.ssh/id_ed25519"
+        },
+        "user": "root",
+        "key_path": "~/.ssh/id_ed25519",
+        "services": [
+            {"name": "XRay Reality", "port": 443, "check_cmd": "ss -tlnp | grep ':443.*xray'"}
+        ],
+        "connections_cmd": "ss -tn state established sport = :443 | grep -v Local | wc -l",
+        "dpi_check": {
+            "host": "YOUR_FINLAND_IP",
+            "port": 443,
+            "relay_port": 2054
+        },
+        "links": [
+            {
+                "name": "VLESS Reality (direct)",
+                "protocol": "vless",
+                "link": "vless://YOUR-UUID@YOUR_FINLAND_IP:443?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=YOUR_PUBLIC_KEY&sid=#Finland-Reality"
+            },
+            {
+                "name": "VLESS Reality (via relay)",
+                "protocol": "vless",
+                "link": "vless://YOUR-UUID@YOUR_RUSSIA_IP:2054?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=YOUR_PUBLIC_KEY&sid=#Finland-via-Russia"
+            }
+        ]
+    }
+}

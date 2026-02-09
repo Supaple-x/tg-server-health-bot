@@ -1,0 +1,21 @@
+[Unit]
+Description=Server Health Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/server-health-bot
+ExecStart=/opt/server-health-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Environment
+EnvironmentFile=/opt/server-health-bot/.env
+
+# Logging
+StandardOutput=append:/var/log/server-health-bot/bot.log
+StandardError=append:/var/log/server-health-bot/error.log
+
+[Install]
+WantedBy=multi-user.target
