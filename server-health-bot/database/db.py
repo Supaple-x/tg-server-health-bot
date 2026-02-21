@@ -52,12 +52,14 @@ class ServerService:
 
 @dataclass
 class User:
-    """Authorized bot user"""
+    """Bot user (auto-registered)"""
     id: Optional[int]
     telegram_id: int
     username: Optional[str] = None
-    added_by: Optional[int] = None  # telegram_id of admin who added
+    added_by: Optional[int] = None
     created_at: Optional[datetime] = None
+    is_banned: bool = False
+    last_seen: Optional[datetime] = None
 
 
 class Database:
@@ -128,14 +130,16 @@ class Database:
                 )
             """)
 
-            # Authorized users table
+            # Users table (auto-registered)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     telegram_id INTEGER UNIQUE NOT NULL,
                     username TEXT,
                     added_by INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_banned BOOLEAN DEFAULT 0,
+                    last_seen TIMESTAMP
                 )
             """)
 
@@ -158,6 +162,16 @@ class Database:
                 pass
             try:
                 await db.execute("ALTER TABLE servers ADD COLUMN disk_gb REAL")
+            except:
+                pass
+
+            # Add new columns to users if not exist
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT 0")
+            except:
+                pass
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN last_seen TIMESTAMP")
             except:
                 pass
 
@@ -344,43 +358,52 @@ class Database:
 
     # ============== Users ==============
 
-    async def is_authorized(self, telegram_id: int) -> bool:
-        """Check if user is authorized (admin or in users table)"""
+    async def ensure_user(self, telegram_id: int, username: str = None) -> None:
+        """Auto-register user if new, update last_seen and username"""
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO users (telegram_id, username, last_seen)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    username = COALESCE(?, username),
+                    last_seen = CURRENT_TIMESTAMP
+            """, (telegram_id, username, username))
+            await conn.commit()
+
+    async def is_banned(self, telegram_id: int) -> bool:
+        """Check if user is banned"""
         if telegram_id == settings.admin_id:
-            return True
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,)
+            return False
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT is_banned FROM users WHERE telegram_id = ?", (telegram_id,)
             )
-            return await cursor.fetchone() is not None
+            row = await cursor.fetchone()
+            return bool(row and row[0])
 
-    async def add_user(self, telegram_id: int, username: str = None, added_by: int = None) -> bool:
-        """Add authorized user"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    "INSERT INTO users (telegram_id, username, added_by) VALUES (?, ?, ?)",
-                    (telegram_id, username, added_by)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    async def remove_user(self, telegram_id: int) -> bool:
-        """Remove authorized user"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM users WHERE telegram_id = ?", (telegram_id,)
+    async def ban_user(self, telegram_id: int) -> bool:
+        """Ban a user"""
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE users SET is_banned = 1 WHERE telegram_id = ?", (telegram_id,)
             )
-            await db.commit()
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def unban_user(self, telegram_id: int) -> bool:
+        """Unban a user"""
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE users SET is_banned = 0 WHERE telegram_id = ?", (telegram_id,)
+            )
+            await conn.commit()
             return cursor.rowcount > 0
 
     async def get_all_users(self) -> list[User]:
-        """Get all authorized users"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM users ORDER BY created_at")
+        """Get all registered users"""
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute("SELECT * FROM users ORDER BY last_seen DESC")
             rows = await cursor.fetchall()
             return [User(**dict(row)) for row in rows]
 

@@ -1,190 +1,128 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Instructions for Claude Code agents working with this repository.
 
 ## Project Overview
 
-A Telegram bot for monitoring and managing the health of multiple Linux servers. The bot runs on one server and can monitor both itself (localhost) and remote servers via SSH. It provides real-time health checks, scheduled monitoring, automatic alerts, and optimization capabilities.
+Telegram bot for monitoring Linux servers, VPN services, and DPI blocking. Runs on a Russia server (176.108.251.49) and monitors itself + remote servers (Finland, USA) via SSH proxy.
 
-**Tech Stack:**
-- Python 3.11+ with async/await
-- aiogram 3.x (Telegram Bot API)
-- asyncssh (async SSH connections)
-- APScheduler (scheduled jobs)
-- aiosqlite (async SQLite database)
-- pydantic-settings (configuration)
+**Tech Stack:** Python 3.11+, aiogram 3.x, asyncssh, APScheduler, aiosqlite, pydantic-settings
 
-## Development Commands
+## Project Structure
 
-### Local Development
+All code lives in `server-health-bot/`. The root contains only repo-level files.
+
+```
+server-health-bot/
+├── main.py                  # Entry point: bot, DB, scheduler init
+├── config.py                # Settings from .env (thresholds, intervals, credentials)
+├── bot/
+│   ├── handlers.py          # Commands (/start, /check, /ban...) and callback handlers
+│   ├── middleware.py         # AuthMiddleware: auto-registers users, blocks banned
+│   └── keyboards.py         # Inline and reply keyboard builders
+├── core/
+│   ├── health_checker.py    # HealthChecker: collects CPU/RAM/Disk/Swap via SSH
+│   ├── ssh_manager.py       # SSHManager (remote) + LocalSSHManager (localhost)
+│   ├── vpn_checker.py       # VPN status, DPI blocking detection, connection links
+│   └── report_formatter.py  # Formats reports as HTML for Telegram
+├── database/
+│   └── db.py                # SQLite: servers, users, services, check_history, settings
+├── scheduler/
+│   └── jobs.py              # Periodic jobs: health checks, alerts, DPI monitoring
+├── scripts/                 # One-time scripts for populating server data
+├── vpn_config.json          # VPN server config with secrets (GITIGNORED)
+├── vpn_config.example.json  # Template for vpn_config.json
+├── .env                     # Bot token, admin ID, thresholds (GITIGNORED)
+├── .env.example             # Template for .env
+├── install.sh               # Production install script
+└── server-health-bot.service # systemd unit file
+```
+
+## Development
+
 ```bash
-# Setup virtual environment
 cd server-health-bot
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with BOT_TOKEN and ADMIN_ID
-
-# Run bot locally
+cp .env.example .env  # Set BOT_TOKEN and ADMIN_ID
+cp vpn_config.example.json vpn_config.json  # Set VPN server details
 python main.py
 ```
 
-### Testing
-```bash
-# Run a health check test (requires SSH to work)
-python -c "import asyncio; from core.health_checker import check_local_server; asyncio.run(check_local_server('test'))"
+## Production (Russia server)
 
-# Test SSH connection to localhost
-ssh localhost "uptime && free -h && df -h /"
-```
-
-### Production Deployment
 ```bash
-# Install on server (from install.sh)
-sudo ./install.sh
+# Deploy files
+scp -i ~/.ssh/temik_cloudru_key FILE artemfcsm@176.108.251.49:/tmp/bot_deploy/
+ssh artemfcsm@176.108.251.49 "sudo cp /tmp/bot_deploy/FILE /opt/server-health-bot/PATH"
 
 # Service management
-sudo systemctl status server-health-bot
 sudo systemctl restart server-health-bot
-sudo systemctl stop server-health-bot
-
-# View logs
+sudo systemctl status server-health-bot
 journalctl -u server-health-bot -f
-tail -f /var/log/server-health-bot/bot.log
 ```
 
 ## Architecture
 
-### Core Components
-
-**main.py** - Entry point
-- Initializes bot, database, and scheduler
-- Manages startup/shutdown lifecycle
-- Sends admin notifications on start/stop
-
-**config.py** - Configuration management
-- Uses pydantic-settings to load from .env
-- Defines all thresholds (CPU, RAM, Disk, Swap)
-- Expands SSH key paths and creates necessary directories
-
-**Database (database/db.py)**
-- SQLite with aiosqlite for async operations
-- Tables: servers, check_history, settings
-- Server model includes: name, host, port, username, key_path, location, description
-- CRUD operations for servers and health check history
-
-**SSH Manager (core/ssh_manager.py)**
-- SSHManager: Connects to remote servers via asyncssh
-- LocalSSHManager: Runs commands locally via subprocess
-- Returns SSHResult dataclass with stdout/stderr/exit_code
-- Handles timeouts and authentication (key-based or password)
-
-**Health Checker (core/health_checker.py)**
-- HealthChecker: Collects metrics from a server via SSH
-- Runs multiple commands to gather: CPU load, RAM, Swap, Disk, processes, uptime, etc.
-- Analyzes metrics against thresholds to determine status (ok/warning/critical)
-- Returns HealthReport dataclass with all metrics and recommendations
-- Helper functions: check_local_server(), check_remote_server()
-
-**Report Formatter (core/report_formatter.py)**
-- format_full_report(): Detailed report with all metrics and issues
-- format_short_report(): Quick summary (one line per server)
-- format_all_servers_summary(): Summary of all servers for scheduled checks
-- Uses Unicode progress bars and status emojis
-
-**Scheduler (scheduler/jobs.py)**
-- scheduled_health_check(): Full health check of all servers (default: every 6 hours)
-- quick_alert_check(): Fast check for critical issues (default: every 15 minutes)
-- auto_optimize_server(): Automatically cleans disk when >80% full
-- Uses APScheduler with AsyncIOScheduler
-
-**Bot Handlers (bot/handlers.py)**
-- Command handlers: /start, /help, /status, /check, /servers, /add, /remove
-- Callback handlers: For inline keyboard buttons
-- FSM (Finite State Machine) for multi-step flows like adding a server
-- Admin-only access enforced via ADMIN_ID check
-
-**Bot Keyboards (bot/keyboards.py)**
-- Inline keyboards for main menu, server list, actions, etc.
-- Dynamic keyboards based on server list from database
-
 ### Data Flow
 
-1. **Scheduled Check Flow:**
-   - APScheduler triggers job → runs health check on all servers → sends summary to admin
-   - If critical issues found → sends additional alert messages
+1. **Scheduled checks** (APScheduler): Full check every 6h, alert check every 15m, DPI check every 3m
+2. **Manual check**: User → command/button → SSH to server → health report → Telegram message
+3. **Auto-optimization**: Alert check finds disk >80% → runs cleanup → notifies admin
+4. **DPI monitoring**: Checks if Russia can reach VPN ports → alerts on blocking state changes
 
-2. **Manual Check Flow:**
-   - User sends /check command → bot queries database for server → creates SSH connection → runs health check → formats and sends report
+### SSH Access Pattern
 
-3. **Adding Server Flow:**
-   - User sends /add → bot enters FSM → asks for name/host/port/username → tests connection → saves to database
+- **Localhost**: `LocalSSHManager` (subprocess)
+- **Remote servers**: `SSHManager` via Russia SSH proxy (Russia → Finland/USA)
+- VPN checker uses `_execute_direct()` and `_execute_via_proxy()` for SSH commands
 
-4. **Auto-Optimization Flow:**
-   - Quick alert check detects disk >80% → runs cleanup commands → sends notification
+### User System
 
-## Important Patterns
+- **Open access**: Any user who messages the bot is auto-registered (middleware)
+- **Admin** (`settings.admin_id`): Can ban/unban users, manage servers
+- **Banned users**: Blocked by middleware, see "access blocked" message
+- Commands: `/ban ID`, `/unban ID`, `/users`
 
-### Configuration Loading
-All configuration is loaded from `.env` via pydantic-settings. Settings are accessed through the global `settings` object from `config.py`. Never hardcode credentials or thresholds.
+### Database Tables
 
-### Error Handling
-- SSH operations always return SSHResult with success flag
-- Health checks collect errors in report.errors list
-- Async operations use try/except to prevent bot crashes
-- Timeouts are enforced on all SSH connections
+- `servers` — monitored server configs (name, host, port, username, key_path, metadata)
+- `users` — auto-registered bot users (telegram_id, username, is_banned, last_seen)
+- `server_services` — services running on servers (type, port, status, resources)
+- `check_history` — health check results log
+- `settings` — key-value store for dynamic config
 
-### Async/Await Usage
-- All I/O operations are async (SSH, database, bot API calls)
-- Use `async with` for connections (SSH, database)
-- Use `await` for all async functions
-- Main loop: `asyncio.run(main())`
+### VPN Config
 
-### Database Access
-- Always use async with for database connections
-- Use parameterized queries to prevent SQL injection
-- Server changes update both database and in-memory state
+`vpn_config.json` contains sensitive data (UUIDs, public keys, SSH paths, VLESS links). Never commit it. Structure:
+```json
+{
+  "ServerName": {
+    "host": "IP", "user": "root", "key_path": "~/.ssh/key",
+    "vpn_port": 443, "protocol": "VLESS+Reality",
+    "links": ["vless://..."],
+    "proxy_host": "...", "proxy_user": "...", "proxy_key_path": "..."
+  }
+}
+```
 
-### Telegram Bot Patterns
-- Use aiogram 3.x Router for handlers
-- Parse mode is HTML by default (set in Bot initialization)
-- Admin-only commands check `message.from_user.id == settings.admin_id`
-- FSM (States) for multi-step conversations like adding servers
+## Key Patterns
 
-### SSH Execution
-- LocalSSHManager for localhost (uses subprocess)
-- SSHManager for remote servers (uses asyncssh)
-- Always set timeouts to prevent hanging
-- Commands are shell strings executed with `sh -c`
+- **All I/O is async** — SSH, DB, Telegram API. Use `await` everywhere.
+- **SSHResult** — All SSH ops return `SSHResult(success, stdout, stderr, exit_code)`. Never raise.
+- **Health status hierarchy**: critical > warning > error > ok. Overall status = worst metric.
+- **HTML parse mode** — All Telegram messages use HTML. Use `<b>`, `<code>`, not Markdown.
+- **Config from .env** — Access via global `settings` object from `config.py`. Never hardcode.
+- **Middleware handles auth** — No per-handler auth checks. `is_admin` flag passed in handler data.
+- **DPI state tracking** — In-memory dict in vpn_checker.py. Alerts only on state changes.
+- **Callback data format** — `action:param` (e.g., `check_server:Finland`, `opt_journal:Russia`)
 
-### Health Status Logic
-- ok: All metrics below warning threshold
-- warning: At least one metric above warning but below critical
-- critical: At least one metric above critical threshold
-- error: Failed to collect metrics (SSH error, timeout, etc.)
+## Important Gotchas
 
-## Key Files Reference
-
-- **main.py:87-120** - Bot initialization and startup sequence
-- **config.py:10-60** - Settings class with all configuration
-- **database/db.py:53-199** - Database class with CRUD operations
-- **core/ssh_manager.py:23-100** - SSHManager class
-- **core/health_checker.py:67-300** - HealthChecker class with metric collection
-- **bot/handlers.py:68-78** - /start command handler pattern
-- **scheduler/jobs.py:22-84** - Scheduled health check job
-
-## Notes for Development
-
-- The bot supports both local (localhost) and remote servers
-- SSH keys are stored in ~/.ssh/ and referenced by path in database
-- Scheduled jobs are configured via .env (CHECK_INTERVAL_HOURS, ALERT_CHECK_INTERVAL_MINUTES)
-- Auto-optimization triggers when disk usage exceeds 80%
-- All dangerous operations require confirmation via inline keyboard
-- Country flags are mapped in bot/handlers.py:38-49 for server display
-- The bot sends startup/shutdown notifications to admin
-- Logs are written to both file (./logs/bot.log) and stdout
+- **VPN checker relay test**: Tests from Russia to `127.0.0.1:relay_port`, NOT from target server back
+- **Docker overlay2 mounts**: All show same % as root `/` — they're the same filesystem
+- **AdGuardHome on Finland**: Query log can grow to 10+ GB. Set `interval: 2h` in config
+- **SSH key on server**: `/home/artemfcsm/.ssh/id_ed25519` (not temik_cloudru_key)
+- **Public repo**: Never commit secrets (vpn_config.json, .env, SSH keys)
+- **Marzban inbound tags**: Must match tags in Marzban SQLite `inbounds` table
+- **iptables relay**: Russia:2054→Finland:443, Russia:2055→USA:443 (DNAT+MASQUERADE)

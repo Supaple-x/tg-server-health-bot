@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuthMiddleware(BaseMiddleware):
-    """Check if user is authorized (admin or in users table)"""
+    """Auto-register users and check if banned"""
 
     async def __call__(
         self,
@@ -26,18 +26,22 @@ class AuthMiddleware(BaseMiddleware):
         if not user:
             return
 
-        is_admin = user.id == settings.admin_id
-        if is_admin or await db.is_authorized(user.id):
-            data["is_admin"] = is_admin
-            return await handler(event, data)
+        # Check if user is banned
+        if await db.is_banned(user.id):
+            if isinstance(event, Message):
+                await event.answer(
+                    "🚫 <b>Доступ заблокирован</b>\n\n"
+                    "Обратитесь к администратору.",
+                    parse_mode="HTML"
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🚫 Доступ заблокирован", show_alert=True)
+            return
 
-        # Not authorized
-        if isinstance(event, Message):
-            await event.answer(
-                "🔒 <b>Доступ закрыт</b>\n\n"
-                "Обратитесь к администратору для получения доступа.\n"
-                f"Ваш Telegram ID: <code>{user.id}</code>",
-                parse_mode="HTML"
-            )
-        elif isinstance(event, CallbackQuery):
-            await event.answer("🔒 Доступ закрыт", show_alert=True)
+        # Auto-register new users
+        is_admin = user.id == settings.admin_id
+        if not is_admin:
+            await db.ensure_user(user.id, user.username)
+
+        data["is_admin"] = is_admin
+        return await handler(event, data)

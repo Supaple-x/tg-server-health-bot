@@ -972,18 +972,17 @@ async def add_server_username(message: Message, state: FSMContext):
 
 # ============== User Management (admin only) ==============
 
-@router.message(Command("adduser"))
-async def cmd_add_user(message: Message, is_admin: bool = False):
-    """Add authorized user by Telegram ID"""
+@router.message(Command("ban"))
+async def cmd_ban(message: Message, is_admin: bool = False):
+    """Ban user by Telegram ID"""
     if not is_admin:
-        await message.answer("🔒 Только администратор может управлять пользователями.")
+        await message.answer("🔒 Только администратор может банить пользователей.")
         return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
-            "ℹ️ Использование: <code>/adduser TELEGRAM_ID</code>\n\n"
-            "Пользователь может узнать свой ID у @userinfobot",
+            "ℹ️ Использование: <code>/ban TELEGRAM_ID</code>",
             parse_mode="HTML"
         )
         return
@@ -995,33 +994,33 @@ async def cmd_add_user(message: Message, is_admin: bool = False):
         return
 
     if telegram_id == settings.admin_id:
-        await message.answer("ℹ️ Администратор уже имеет полный доступ.")
+        await message.answer("❌ Нельзя заблокировать администратора.")
         return
 
-    success = await db.add_user(telegram_id, added_by=message.from_user.id)
-    if success:
+    banned = await db.ban_user(telegram_id)
+    if banned:
         await message.answer(
-            f"✅ Пользователь <code>{telegram_id}</code> добавлен.",
+            f"🚫 Пользователь <code>{telegram_id}</code> заблокирован.",
             parse_mode="HTML"
         )
     else:
         await message.answer(
-            f"ℹ️ Пользователь <code>{telegram_id}</code> уже авторизован.",
+            f"❌ Пользователь <code>{telegram_id}</code> не найден.",
             parse_mode="HTML"
         )
 
 
-@router.message(Command("removeuser"))
-async def cmd_remove_user(message: Message, is_admin: bool = False):
-    """Remove authorized user"""
+@router.message(Command("unban"))
+async def cmd_unban(message: Message, is_admin: bool = False):
+    """Unban user"""
     if not is_admin:
-        await message.answer("🔒 Только администратор может управлять пользователями.")
+        await message.answer("🔒 Только администратор может разбанивать.")
         return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
-            "ℹ️ Использование: <code>/removeuser TELEGRAM_ID</code>",
+            "ℹ️ Использование: <code>/unban TELEGRAM_ID</code>",
             parse_mode="HTML"
         )
         return
@@ -1032,10 +1031,10 @@ async def cmd_remove_user(message: Message, is_admin: bool = False):
         await message.answer("❌ ID должен быть числом.")
         return
 
-    removed = await db.remove_user(telegram_id)
-    if removed:
+    unbanned = await db.unban_user(telegram_id)
+    if unbanned:
         await message.answer(
-            f"✅ Пользователь <code>{telegram_id}</code> удалён.",
+            f"✅ Пользователь <code>{telegram_id}</code> разблокирован.",
             parse_mode="HTML"
         )
     else:
@@ -1047,29 +1046,13 @@ async def cmd_remove_user(message: Message, is_admin: bool = False):
 
 @router.message(Command("users"))
 async def cmd_users(message: Message, is_admin: bool = False):
-    """List authorized users"""
+    """List all registered users"""
     if not is_admin:
         await message.answer("🔒 Только администратор может просматривать список пользователей.")
         return
 
     users = await db.get_all_users()
-
-    lines = [
-        "👥 <b>Авторизованные пользователи:</b>",
-        "",
-        f"👑 <code>{settings.admin_id}</code> — администратор",
-    ]
-
-    for user in users:
-        name = f" (@{user.username})" if user.username else ""
-        lines.append(f"👤 <code>{user.telegram_id}</code>{name}")
-
-    if not users:
-        lines.append("\n<i>Других пользователей нет.</i>")
-
-    lines.append(f"\nВсего: {len(users) + 1}")
-    lines.append("\n/adduser ID — добавить\n/removeuser ID — удалить")
-
+    lines = _format_users_list(users)
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -1081,29 +1064,34 @@ async def cb_users_list(callback: CallbackQuery, is_admin: bool = False):
         return
 
     users = await db.get_all_users()
-
-    lines = [
-        "👥 <b>Авторизованные пользователи:</b>",
-        "",
-        f"👑 <code>{settings.admin_id}</code> — администратор",
-    ]
-
-    for user in users:
-        name = f" (@{user.username})" if user.username else ""
-        lines.append(f"👤 <code>{user.telegram_id}</code>{name}")
-
-    if not users:
-        lines.append("\n<i>Других пользователей нет.</i>")
-
-    lines.append(f"\nВсего: {len(users) + 1}")
-    lines.append("\n/adduser ID — добавить\n/removeuser ID — удалить")
-
+    lines = _format_users_list(users)
     await callback.message.edit_text(
         "\n".join(lines),
         parse_mode="HTML",
         reply_markup=settings_keyboard()
     )
     await callback.answer()
+
+
+def _format_users_list(users: list) -> list[str]:
+    """Format users list for display"""
+    lines = [
+        "👥 <b>Пользователи бота:</b>",
+        "",
+        f"👑 <code>{settings.admin_id}</code> — администратор",
+    ]
+
+    for user in users:
+        name = f" (@{user.username})" if user.username else ""
+        status = "🚫" if user.is_banned else "👤"
+        lines.append(f"{status} <code>{user.telegram_id}</code>{name}")
+
+    if not users:
+        lines.append("\n<i>Пользователей пока нет.</i>")
+
+    lines.append(f"\nВсего: {len(users) + 1}")
+    lines.append("\n/ban ID — заблокировать\n/unban ID — разблокировать")
+    return lines
 
 
 # ============== Helper Functions ==============

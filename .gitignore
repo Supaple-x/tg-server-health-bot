@@ -19,14 +19,15 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
-# Security
-id_rsa
+# Security - never commit keys or secrets
+*.pem
+id_rsa*
 vpn_config.json
 
 # Claude
 .claude/
-nul
 
 # Archives
 *.tar.gz
